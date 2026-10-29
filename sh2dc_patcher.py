@@ -5,8 +5,8 @@ Builds a patched copy of your US *Shadow Hearts: Covenant* discs, using your own
 *Shadow Hearts II Director's Cut* discs.  The patch data holds no game files: it is a list of instructions ("copy these bytes from
 your disc") plus the new material (English translation, code patches, dub audio, title plate).
 
-    python sh2dc_patcher.py --edition regular --us1 US1.iso --us2 US2.iso --dc1 DC1.iso --dc2 DC2.iso --out OUTDIR
-    python sh2dc_patcher.py --edition undub   ... (same inputs)
+    python3 sh2dc_patcher.py --edition regular --us1 US1.iso --us2 US2.iso --dc1 DC1.iso --dc2 DC2.iso --out OUTDIR
+    python3 sh2dc_patcher.py --edition undub   ... (same inputs)
 
   --edition regular  English, with the Director's Cut content added.
   --edition undub    The same, with Japanese voices in every cutscene (English subtitles kept).
@@ -14,6 +14,8 @@ your disc") plus the new material (English translation, code patches, dub audio,
 
 Your ISOs are never modified; each output is a new file.  Needs Python 3.8+.  The UnDub edition also needs numpy and the
 bundled `pcmscodec` program for two cutscenes whose Japanese audio is resampled (without them those two keep English audio).
+On Linux and macOS that is the native `pcmscodec` next to this script (or on PATH); when there is none and cargo is installed,
+it is built from pcmscodec_src/.
 """
 import argparse, hashlib, json, os, shutil, struct, subprocess, sys, tempfile, threading, zipfile
 
@@ -147,6 +149,33 @@ def resample_scene(us_lsd, dc_lsd, rec, codec, tmp):
             break
     return bytes(out)
 
+def codec_works(c):
+    """Runs the codec on an empty stream: catches a missing executable bit or a binary built for another system or CPU."""
+    with tempfile.TemporaryDirectory() as t:
+        a = os.path.join(t, "empty.pcms"); open(a, "wb").close()
+        try: return subprocess.run([c, "decode", a, os.path.join(t, "empty.raw")], capture_output=True).returncode == 0
+        except OSError: return False
+
+def find_codec():
+    """pcmscodec.exe on Windows.  Elsewhere the native `pcmscodec` next to this script, then on PATH, else one built from
+    pcmscodec_src/ with cargo (copied next to this script for the next run).  None when there is no working one."""
+    if os.name == "nt":
+        return next((os.path.join(HERE, n) for n in ("pcmscodec.exe", "pcmscodec") if os.path.exists(os.path.join(HERE, n))), "pcmscodec")
+    local = os.path.join(HERE, "pcmscodec")
+    if os.path.isfile(local) and not os.access(local, os.X_OK):     # unpacking a zip download usually drops the executable bit
+        try: os.chmod(local, os.stat(local).st_mode | 0o111)
+        except OSError: pass
+    for c in (local, shutil.which("pcmscodec")):
+        if c and os.path.isfile(c) and codec_works(c): return c
+    src = os.path.join(HERE, "pcmscodec_src")
+    if shutil.which("cargo") and os.path.isfile(os.path.join(src, "Cargo.toml")):
+        print("building pcmscodec from pcmscodec_src (cargo build --release) ...")
+        built = os.path.join(src, "target", "release", "pcmscodec")
+        if subprocess.run(["cargo", "build", "--release"], cwd=src).returncode == 0 and codec_works(built):
+            try: shutil.copy2(built, local); return local
+            except OSError: return built
+    return None
+
 # ---------------------------------------------------------------------------------------------------------------- build
 def build_disc(d, edition, us_path, dc_path, out_path, man, z, codec):
     D = man["discs"][d]; E = D[edition]
@@ -229,6 +258,7 @@ def build_disc(d, edition, us_path, dc_path, out_path, man, z, codec):
     # 3. UnDub scenes rebuilt by resampling (needs numpy + pcmscodec)
     for path, rec in E.get("resample", []):
         try:
+            if codec is None: raise RuntimeError("no working pcmscodec for this system")
             ui, di = Iso(us_path), Iso(dc_path); ub, db = read_file(ui, Table(ui), path), read_file(di, Table(di), path); ui.close(); di.close()
             if md5(ub) != rec["us_md5"] or md5(db) != rec["dc_md5"]: raise ValueError("source file differs from the expected one")
             with tempfile.TemporaryDirectory() as tmp:
@@ -348,7 +378,18 @@ def main():
     a = ap.parse_args()
     if not os.path.exists(PATCH): raise SystemExit("patchdata.zip must sit next to this script")
     z = zipfile.ZipFile(PATCH); man = json.loads(z.read("manifest.json"))
-    codec = next((os.path.join(HERE, n) for n in ("pcmscodec.exe", "pcmscodec") if os.path.exists(os.path.join(HERE, n))), "pcmscodec")
+    codec = None
+    if a.edition == "undub":
+        codec = find_codec(); import importlib.util
+        if importlib.util.find_spec("numpy") is None or codec is None:
+            print("NOTE: two UnDub cutscenes are resampled and need numpy and pcmscodec; without them they keep their English audio.")
+            if importlib.util.find_spec("numpy") is None:
+                print("  numpy is missing: sudo apt install python3-numpy (Debian/Ubuntu/Mint), sudo dnf install python3-numpy (Fedora),\n"
+                      "  sudo pacman -S python-numpy (Arch), or pip install numpy inside a venv (Steam Deck)")
+            if codec is None:
+                print("  pcmscodec is missing: keep the Linux `pcmscodec` next to this script, or install Rust (cargo) and keep\n"
+                      "  pcmscodec_src/ next to it so the patcher can build it")
+        else: print("pcmscodec:", codec)
     os.makedirs(a.out, exist_ok=True); bad = 0
     tag = " UnDub" if a.edition == "undub" else ""
     if a.single_disc:

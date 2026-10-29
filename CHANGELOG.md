@@ -6,6 +6,13 @@ Ported by JamieTheAnything.
 
 ---
 
+## Linux support (patcher only; `patchdata.zip` is unchanged)
+
+- **The patcher runs on Linux.** `pcmscodec` is a static x86_64 Linux build of the audio codec, next to `pcmscodec.exe`. On Linux and macOS the patcher no longer picks `pcmscodec.exe`, which cannot run there and left the two resampled UnDub cutscenes in English. It uses `pcmscodec` next to the script, then on `PATH`, and builds it from `pcmscodec_src` with `cargo` if neither works. Nothing changes on Windows.
+- **UnDub:** the patcher says when it starts if numpy or the codec is missing, with the install command for common distributions.
+
+---
+
 ## v0.3.2 (`release/patchdata.zip`; the regular edition is unchanged from v0.3.1)
 
 - **UnDub: Japanese voices in battle and in field scenes.** Until now the UnDub edition only had Japanese voices in its cutscenes. It now also uses the Director's Cut sound banks for:
