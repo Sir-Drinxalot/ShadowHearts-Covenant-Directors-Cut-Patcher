@@ -6,7 +6,17 @@ Ported by JamieTheAnything.
 
 ---
 
-## Linux support (patcher only; `patchdata.zip` is unchanged)
+## Unreleased (patcher only; `patchdata.zip` is unchanged)
+
+### Fixed
+
+- **No more broken ISOs that look finished.** A bad dump is often found only partway through a disc, after the ISO copy. The patcher then stopped, but left the half-patched image under its final name. It now writes to `<name>.iso.part` and renames it only once every file is verified. A build that stops (bad dump, full disk, Ctrl+C) deletes its unfinished image, and the single-disc build also deletes its two 4–5 GB temporary images. A build that fails its final check keeps the `.part` name.
+- **Free space is checked first.** The patcher works out the final size before copying anything and stops with a message if the output folder is too small, instead of failing with a full disk after copying gigabytes.
+- **Clear messages for wrong arguments:** `--discs 3` and a mistyped ISO path stop with an explanation instead of a Python traceback.
+
+The output ISOs are byte-identical to the previous patcher's.
+
+### Linux support
 
 - **The patcher runs on Linux.** `pcmscodec` is a static x86_64 Linux build of the audio codec, next to `pcmscodec.exe`. On Linux and macOS the patcher no longer picks `pcmscodec.exe`, which cannot run there and left the two resampled UnDub cutscenes in English. It uses `pcmscodec` next to the script, then on `PATH`, and builds it from `pcmscodec_src` with `cargo` if neither works. Nothing changes on Windows.
 - **UnDub:** the patcher says when it starts if numpy or the codec is missing, with the install command for common distributions.

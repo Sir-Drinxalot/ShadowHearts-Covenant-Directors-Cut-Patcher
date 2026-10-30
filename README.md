@@ -29,7 +29,7 @@ python sh2dc_patcher.py --edition regular --us1 "US Disc 1.iso" --us2 "US Disc 2
 
 For the UnDub edition, change `--edition regular` to `--edition undub`. To build one disc only, add `--discs 1` (disc 1 needs only `--us1` and `--dc1`).
 
-The patcher uses every CPU thread your computer has. Each disc takes from a few seconds to a minute (most of it copying the ISO) and needs about 5 GB of free space. Your original ISOs are never changed. The patched discs are written to the `--out` folder:
+The patcher uses every CPU thread your computer has. Each disc takes from a few seconds to a minute (most of it copying the ISO) and needs about 5 GB of free space (the single-disc build needs about 12 GB while it runs). The patcher checks the free space before it writes anything. Your original ISOs are never changed. If a build stops (a bad dump, a full disk, Ctrl+C), the unfinished image is deleted, so every ISO in the output folder is finished and verified. The patched discs are written to the `--out` folder:
 
 - `Shadow Hearts - Covenant (USA) (Disc 1) [DC v0.3.2].iso`
 - `Shadow Hearts - Covenant (USA) (Disc 1) [DC v0.3.2 UnDub].iso`

@@ -17,7 +17,7 @@ bundled `pcmscodec` program for two cutscenes whose Japanese audio is resampled 
 On Linux and macOS that is the native `pcmscodec` next to this script (or on PATH); when there is none and cargo is installed,
 it is built from pcmscodec_src/.
 """
-import argparse, hashlib, json, os, shutil, struct, subprocess, sys, tempfile, threading, zipfile
+import argparse, gc, hashlib, json, os, shutil, struct, subprocess, sys, tempfile, threading, traceback, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PATCH = os.path.join(HERE, "patchdata.zip")
@@ -83,6 +83,12 @@ class Table:
 def fmt_size(n):
     """decimal GB (what disc and DVD capacities use) and GiB (what Windows Explorer shows, labelled "GB")"""
     return "%.2f GB (%.2f GiB)" % (n / 1e9, n / 2**30)
+
+def check_space(path, need):
+    """Stop before writing when the output folder has less than `need` bytes free (instead of failing halfway with a full disk)."""
+    folder = os.path.dirname(os.path.abspath(path)); free = shutil.disk_usage(folder).free
+    if free < need:
+        raise SystemExit("not enough free space in %s: this step needs %s, only %s is free" % (folder, fmt_size(need), fmt_size(free)))
 
 def read_file(iso, table, name):
     """A file by disc path: root files ("FIELD.BIN") or packed ones ("FIELD/MPS/KS_00_U.MSC")."""
@@ -217,28 +223,31 @@ def build_disc(d, edition, us_path, dc_path, out_path, man, z, codec):
                     try: yield p, fu.result()
                     except ValueError as e: raise SystemExit(str(e))
 
-    print("copying %s -> %s" % (os.path.basename(us_path), out_path))
-    shutil.copyfile(us_path, out_path)
-    o = Iso(out_path, "r+b"); T = Table(o); f = o.f
-    f.seek(0, 2); end = f.tell() // 2048
-    def write(at, data):
-        f.seek(at * 2048); f.write(data + bytes(-len(data) % 2048))
+    end = os.path.getsize(us_path) // 2048
     secs = lambda n: (n + 2047) // 2048
     # Placement plan, so the result stays as small as possible (single-layer DVD): a replaced file is written over the old one when
     # it fits; otherwise the old space is freed, and new or moved files fill the freed gaps (largest file first, best fit) before
     # anything is appended.  A file's offset counts from its directory's base sector, so a gap must lie after that base.
+    # Planned on the US disc's own table (the copy's is identical), so the final size is known before anything is written.
     jobs = list(E["replace"]); place, holes, need = {}, [], []
     for path, spec in jobs:
-        i, lba, size, _ = T.find(path)
+        i, lba, size, _ = ut.find(path)
         if secs(spec["size"]) <= secs(size): place[path] = ("inplace", lba)
-        else: holes.append([lba, secs(size)]); need.append((spec["size"], path, lba - (T.ent[i][1] >> 7)))
-    for path, spec in E["new"]: need.append((spec["size"], path, T.find(path.rsplit("/", 1)[0])[1]))
+        else: holes.append([lba, secs(size)]); need.append((spec["size"], path, lba - (ut.ent[i][1] >> 7)))
+    for path, spec in E["new"]: need.append((spec["size"], path, ut.find(path.rsplit("/", 1)[0])[1]))
     for size, path, base in sorted(need, reverse=True):
         fit = [h for h in holes if h[1] >= secs(size) and h[0] >= base]
         if fit:
             h = min(fit, key=lambda h: h[1]); place[path] = ("hole", h[0]); h[0] += secs(size); h[1] -= secs(size)
         else:
             place[path] = ("append", end); end += secs(size)
+    check_space(out_path, (end + secs((len(ut.ent) + len(E["new"]) + 1) * 16)) * 2048)
+
+    print("copying %s -> %s" % (os.path.basename(us_path), out_path))
+    shutil.copyfile(us_path, out_path)
+    o = Iso(out_path, "r+b"); T = Table(o); f = o.f
+    def write(at, data):
+        f.seek(at * 2048); f.write(data + bytes(-len(data) % 2048))
     # 1. files only the Director's Cut has: new table entries at the end of the table
     added = []
     for path, data in made(E["new"]):
@@ -280,7 +289,7 @@ def build_disc(d, edition, us_path, dc_path, out_path, man, z, codec):
         if b is None or md5(b) != spec["md5"]: bad += 1; print("  check failed:", path)
     v.close(); dc.close(); us.close()
     size = os.path.getsize(out_path); dvd5 = 2295104 * 2048
-    print("disc %s done: %s (%s)" % (d, out_path, "all files verified" if not bad else "%d FAILED" % bad))
+    print("disc %s done (%s)" % (d, "all files verified" if not bad else "%d FAILED" % bad))
     print("size %s: %s" % (fmt_size(size), ("fits a single-layer DVD (limit %s, %.0f MB to spare)" % (fmt_size(dvd5), (dvd5 - size) / 1e6)) if size <= dvd5
           else "too big for a single-layer DVD by %.1f MB (use a dual-layer disc)" % ((size - dvd5) / 1e6)))
     return bad
@@ -329,6 +338,7 @@ def make_single(d1_path, d2_path, out_path, us2_path):
     starts = sorted({(e[2] & 0x7fffffff) // 16 for e in U2.ent if e[2] & 0x80000000})
     stop = next((s for s in starts if s > start), len(U2.ent))
     names = [U2.ent[k][0] for k in range(start, stop)]
+    check_space(out_path, sum((T2.find("LSD/" + decode_key(k))[2] + 2047) // 2048 * 2048 for k in names) + (len(T.ent) + len(names) + 129) * 16)
     lsd_base = T.find("LSD")[1]; added = []
     for key in names:
         data = read_file(d2, T2, "LSD/" + decode_key(key)); size = len(data)
@@ -356,7 +366,7 @@ def make_single(d1_path, d2_path, out_path, us2_path):
         if a is None or a != b: bad += 1; print("  check failed: LSD/" + name)
     v.close(); d2.close(); u2.close(); os.remove(d2_path)
     size = os.path.getsize(out_path); dvd9 = 4171712 * 2048
-    print("single disc done: %s (%s)" % (out_path, "all files verified" if not bad else "%d FAILED" % bad))
+    print("single disc done (%s)" % ("all files verified" if not bad else "%d FAILED" % bad))
     print("size %s: %s" % (fmt_size(size), ("fits a dual-layer DVD (limit %s)" % fmt_size(dvd9)) if size <= dvd9 else "too big for a dual-layer DVD"))
     return bad
 
@@ -368,6 +378,27 @@ def decode_key(k):
             c = u % 40; u //= 40
             if c: s += AL[c - 1]
     return s
+
+def guarded(step, unfinished):
+    """Run one build step.  If it stops (bad dump, full disk, Ctrl+C), delete the half-written images in `unfinished` so no broken
+    ISO is left behind looking finished, then exit with the reason.  The cleanup runs after the except block, once the failed
+    step's open files are released (Windows cannot delete an open file)."""
+    try: return step()
+    except KeyboardInterrupt: why = "stopped (Ctrl+C)"
+    except SystemExit as e: why = str(e.code)
+    except (ValueError, OSError) as e: why = str(e)
+    except Exception: traceback.print_exc(); why = "the build failed (error above)"
+    gc.collect()
+    for p in unfinished:
+        try: os.remove(p); print("deleted the unfinished", p)
+        except FileNotFoundError: pass
+        except OSError as e: print("could not delete the unfinished %s (%s); delete it yourself" % (p, e))
+    raise SystemExit(why)
+
+def finish(part, out, bad):
+    """A verified build gets its real name.  One that failed its check keeps the .part name, so it is not mistaken for a good one."""
+    if bad: print("NOT verified, left as %s: do not use it." % part); return
+    os.replace(part, out); print("written:", out)
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -390,22 +421,29 @@ def main():
                 print("  pcmscodec is missing: keep the Linux `pcmscodec` next to this script, or install Rust (cargo) and keep\n"
                       "  pcmscodec_src/ next to it so the patcher can build it")
         else: print("pcmscodec:", codec)
+    discs = list(dict.fromkeys(d.strip() for d in a.discs.split(",")))
+    if a.single_disc: discs = ["1", "2"]
+    if not discs or any(d not in ("1", "2") for d in discs): raise SystemExit("--discs takes 1, 2 or 1,2")
+    for d in discs:
+        for k in ("us" + d, "dc" + d):
+            if not getattr(a, k): raise SystemExit("--single-disc needs all four ISOs (--us1 --us2 --dc1 --dc2)" if a.single_disc
+                                                   else "disc %s needs --us%s and --dc%s" % (d, d, d))
+            if not os.path.isfile(getattr(a, k)): raise SystemExit("--%s: %s not found" % (k, getattr(a, k)))
     os.makedirs(a.out, exist_ok=True); bad = 0
     tag = " UnDub" if a.edition == "undub" else ""
     if a.single_disc:
-        for k in ("us1", "us2", "dc1", "dc2"):
-            if not getattr(a, k): raise SystemExit("--single-disc needs all four ISOs (--us1 --us2 --dc1 --dc2)")
         t1, t2 = os.path.join(a.out, "~disc1.tmp.iso"), os.path.join(a.out, "~disc2.tmp.iso")
-        bad += build_disc("2", a.edition, a.us2, a.dc2, t2, man, z, codec)
-        bad += build_disc("1", a.edition, a.us1, a.dc1, t1, man, z, codec)
-        out = os.path.join(a.out, "Shadow Hearts - Covenant (USA) [DC v%s%s Single Disc].iso" % (man["version"], tag))
-        bad += make_single(t1, t2, out, a.us2)
+        out = os.path.join(a.out, "Shadow Hearts - Covenant (USA) [DC v%s%s Single Disc].iso" % (man["version"], tag)); part = out + ".part"
+        bad += guarded(lambda: build_disc("2", a.edition, a.us2, a.dc2, t2, man, z, codec), [t2])
+        bad += guarded(lambda: build_disc("1", a.edition, a.us1, a.dc1, t1, man, z, codec), [t1, t2])
+        bad += guarded(lambda: make_single(t1, t2, part, a.us2), [t1, t2, part])
+        finish(part, out, bad)
         print("\nFinished." if not bad else "\nFinished with errors."); sys.exit(1 if bad else 0)
-    for d in a.discs.split(","):
-        d = d.strip(); us, dc = getattr(a, "us" + d), getattr(a, "dc" + d)
-        if not us or not dc: raise SystemExit("disc %s needs --us%s and --dc%s" % (d, d, d))
-        out = os.path.join(a.out, "Shadow Hearts - Covenant (USA) (Disc %s) [DC v%s%s].iso" % (d, man["version"], " UnDub" if a.edition == "undub" else ""))
-        bad += build_disc(d, a.edition, us, dc, out, man, z, codec)
+    for d in discs:
+        us, dc = getattr(a, "us" + d), getattr(a, "dc" + d)
+        out = os.path.join(a.out, "Shadow Hearts - Covenant (USA) (Disc %s) [DC v%s%s].iso" % (d, man["version"], tag)); part = out + ".part"
+        b = guarded(lambda: build_disc(d, a.edition, us, dc, part, man, z, codec), [part]); bad += b
+        finish(part, out, b)
     print("\nFinished." if not bad else "\nFinished with errors.")
     sys.exit(1 if bad else 0)
 
