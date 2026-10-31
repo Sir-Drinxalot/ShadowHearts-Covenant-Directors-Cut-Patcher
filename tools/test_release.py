@@ -1,7 +1,7 @@
 """Release test: build every edition with the patcher of each branch and check that the builds verify and match each other.
 usage: python3 tools/test_release.py ISO_DIR [--us1 F --us2 F --dc1 F --dc2 F] [--branches main,patcher-fixes]
                                              [--editions regular,undub] [--no-single] [--work DIR]
-  ISO_DIR holds us1.iso, us2.iso (SLUS-21041/21044) and dc1.iso, dc2.iso (SLPS-73214/73215); --usN/--dcN name other files.
+  ISO_DIR holds us1.iso, us2.iso (SLUS-21041/21044) and dc1.iso, dc2.iso (SLPS-73214); --usN/--dcN name other files.
   Each branch's sh2dc_patcher.py, patchdata.zip and pcmscodec are taken from git (the local branch, else origin/BRANCH), so the
   working tree may be on any branch.  Builds run one at a time in WORK/out and are deleted once hashed: about 13 GB free is
   enough with the single-disc build, 9 GB without.  Prints a summary at the end (also in WORK/summary.txt; the full patcher
@@ -9,7 +9,7 @@ usage: python3 tools/test_release.py ISO_DIR [--us1 F --us2 F --dc1 F --dc2 F] [
 import argparse, hashlib, importlib.util, os, platform, re, shutil, subprocess, sys, time
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-EXPECTED = {"us1": "SLUS_210.41", "us2": "SLUS_210.44", "dc1": "SLPS_732.14", "dc2": "SLPS_732.15"}
+EXPECTED = {"us1": "SLUS_210.41", "us2": "SLUS_210.44", "dc1": "SLPS_732.14", "dc2": "SLPS_732.14"}   # both DC discs boot SLPS_732.14
 NOTEWORTHY = re.compile(r"done|FAILED|check failed|WARNING|NOTE|resampled|differs|not enough|not found|NOT verified|deleted the unfinished")
 
 def gb(n): return "%.2f GB" % (n / 1e9)
